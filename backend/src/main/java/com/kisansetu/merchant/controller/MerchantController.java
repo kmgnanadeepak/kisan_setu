@@ -2,6 +2,7 @@ package com.kisansetu.merchant.controller;
 
 import com.kisansetu.common.ApiResponse;
 import com.kisansetu.common.PageResponse;
+import com.kisansetu.common.util.GeoUtil;
 import com.kisansetu.merchant.dto.MerchantSummaryResponse;
 import com.kisansetu.merchant.dto.ProductRequest;
 import com.kisansetu.merchant.dto.ProductResponse;
@@ -13,6 +14,7 @@ import com.kisansetu.order.dto.OrderResponse;
 import com.kisansetu.order.service.OrderService;
 import com.kisansetu.security.CurrentUser;
 import com.kisansetu.security.Role;
+import com.kisansetu.user.repository.ProfileRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -36,6 +38,7 @@ public class MerchantController {
     private final MerchantMarketplaceService marketplaceService;
     private final OrderService orderService;
     private final NotificationService notificationService;
+    private final ProfileRepository profileRepository;
 
     // ---------------- Merchant marketplace (farmer browsing) ----------------
 
@@ -65,13 +68,17 @@ public class MerchantController {
         return ApiResponse.ok(marketplaceService.browseProducts(search, category, minPrice, maxPrice, pageable));
     }
 
-    @GetMapping("/marketplace")
-    @Operation(summary = "Browse merchants (aggregated pricing + distance)")
+    @GetMapping("/marketplace/nearby")
+    @Operation(summary = "Browse nearby merchants using authenticated farmer's location")
     @PreAuthorize("hasAnyRole('FARMER')")
-    public ApiResponse<List<MerchantSummaryResponse>> getMerchants(
-            @RequestParam(required = false) Double lat,
-            @RequestParam(required = false) Double lng) {
-        return ApiResponse.ok(marketplaceService.getMerchants(lat, lng));
+    public ApiResponse<List<MerchantSummaryResponse>> getNearbyMerchants(
+            @RequestParam(required = false) Double radiusKm,
+            @RequestParam(required = false) String search) {
+        UUID farmerId = CurrentUser.get().userId();
+        var farmerProfile = profileRepository.findByUserId(farmerId);
+        Double lat = farmerProfile.map(p -> GeoUtil.asDouble(p.getLatitude())).orElse(null);
+        Double lng = farmerProfile.map(p -> GeoUtil.asDouble(p.getLongitude())).orElse(null);
+        return ApiResponse.ok(marketplaceService.getMerchants(lat, lng, radiusKm, search));
     }
 
     @GetMapping("/marketplace/{merchantId}")
@@ -79,6 +86,28 @@ public class MerchantController {
     @PreAuthorize("hasAnyRole('FARMER')")
     public ApiResponse<List<ProductResponse>> getMerchantProducts(@PathVariable UUID merchantId) {
         return ApiResponse.ok(marketplaceService.getMerchantProducts(merchantId));
+    }
+
+    @GetMapping("/marketplace")
+    @Operation(summary = "Browse merchants (aggregated pricing + distance)")
+    @PreAuthorize("hasAnyRole('FARMER')")
+    public ApiResponse<List<MerchantSummaryResponse>> getMerchants(
+            @RequestParam(required = false) Double lat,
+            @RequestParam(required = false) Double lng,
+            @RequestParam(required = false) Double radiusKm,
+            @RequestParam(required = false) String search) {
+        return ApiResponse.ok(marketplaceService.getMerchants(lat, lng, radiusKm, search));
+    }
+
+    @GetMapping("/marketplace/{merchantId}/profile")
+    @Operation(summary = "Get merchant profile details")
+    @PreAuthorize("hasAnyRole('FARMER')")
+    public ApiResponse<MerchantSummaryResponse> getMerchantProfile(
+            @PathVariable UUID merchantId,
+            @RequestParam(required = false) Double lat,
+            @RequestParam(required = false) Double lng) {
+        return ApiResponse.ok(marketplaceService.getMerchantProfile(merchantId, lat, lng)
+                .orElseThrow(() -> com.kisansetu.common.exception.ApiException.notFound("Merchant not found")));
     }
 
     // ---------------- Farmer -> Merchant orders ----------------

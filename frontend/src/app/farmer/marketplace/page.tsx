@@ -3,82 +3,81 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { PageHeader, Spinner, EmptyState } from "@/components/ui";
-import { formatINR } from "@/lib/format";
 
-type Product = {
-  id: string;
+type Merchant = {
   merchantId: string;
-  merchantName?: string;
-  name: string;
-  description?: string;
-  category?: string;
-  price: number;
-  quantity: number;
-  unit: string;
-  imageUrl?: string;
-  inStock: boolean;
+  fullName: string;
+  city: string;
+  state: string;
+  avatarUrl?: string;
+  latitude: number | null;
+  longitude: number | null;
+  distanceKm: number | null;
+  itemCount: number;
+  categories: string[];
 };
 
 export default function FarmerMarketplacePage() {
-  const [page, setPage] = useState<Product[] | null>(null);
+  const [merchants, setMerchants] = useState<Merchant[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("");
-  const [categories, setCategories] = useState<string[]>([]);
-  const [quantity, setQuantity] = useState<Record<string, string>>({});
-  const [busyId, setBusyId] = useState<string | null>(null);
-
-  const loadCategories = useCallback(() => {
-    api
-      .get<string[]>("/api/merchant/marketplace/categories")
-      .then((cats) => setCategories(cats))
-      .catch(() => setCategories([]));
-  }, []);
+  const [radius, setRadius] = useState<number>(20);
+  const [loading, setLoading] = useState(false);
 
   const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
     const params = new URLSearchParams();
     if (search) params.set("search", search);
-    if (category) params.set("category", category);
-    params.set("page", "0");
-    params.set("size", "50");
+    if (radius) params.set("radiusKm", radius.toString());
+    
+    const queryString = params.toString();
+    const url = `/api/merchant/marketplace/nearby${queryString ? '?' + queryString : ''}`;
+    
     api
-      .get<{ content: Product[] }>(`/api/merchant/marketplace/products?${params.toString()}`)
-      .then((r) => setPage(r.content))
-      .catch((e) => setError(e.message));
-  }, [search, category]);
+      .get<Merchant[]>(url)
+      .then((data) => setMerchants(data))
+      .catch((e) => {
+        console.error('Error loading merchants:', e);
+        setError(e instanceof Error ? e.message : 'Failed to load merchants');
+      })
+      .finally(() => setLoading(false));
+  }, [search, radius]);
 
   useEffect(() => {
-    loadCategories();
     load();
-  }, [loadCategories, load]);
+  }, [load]);
 
-  async function order(product: Product) {
-    const q = parseInt(quantity[product.id] ?? "");
-    if (!q || q <= 0) return;
-    setBusyId(product.id);
-    try {
-      await api.post("/api/merchant/orders", {
-        productId: product.id,
-        quantity: q,
-        notes: "",
-      });
-      alert(`Order placed for ${q} ${product.unit} of ${product.name}`);
-      setQuantity((q) => ({ ...q, [product.id]: "" }));
-      load();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to place order");
-    } finally {
-      setBusyId(null);
-    }
-  }
+  const formatDistance = (distance: number | null | undefined) => {
+    if (distance == null) return "Location unknown";
+    return `${distance.toFixed(1)} km away`;
+  };
 
-  if (error) return <p className="text-red-600">{error}</p>;
+  const formatLocation = (city: string, state: string) => {
+    if (city && state) return `${city}, ${state}`;
+    if (city) return city;
+    if (state) return state;
+    return "Location unknown";
+  };
+
+  if (error) return (
+    <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+      <p className="text-red-600 font-semibold">Error loading marketplace</p>
+      <p className="text-red-500 text-sm mt-1">{error}</p>
+      <button 
+        onClick={load}
+        className="mt-3 rounded-lg bg-red-100 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-200"
+      >
+        Retry
+      </button>
+    </div>
+  );
 
   return (
     <div>
       <PageHeader
         title="Marketplace"
-        subtitle="Browse seeds, fertilizers, pesticides and equipment from merchants"
+        subtitle="Find agricultural suppliers near you"
         action={
           <a
             href="/farmer/merchant-orders"
@@ -89,75 +88,86 @@ export default function FarmerMarketplacePage() {
         }
       />
 
-      <div className="mb-4 flex flex-wrap gap-2">
+      <div className="mb-6 flex flex-wrap gap-3">
         <input
           className="w-64 rounded-xl border border-line bg-white px-4 py-2.5 text-sm focus:border-brand focus:outline-none"
-          placeholder="Search products..."
+          placeholder="Search merchants..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
         <select
           className="rounded-xl border border-line bg-white px-3 py-2.5 text-sm focus:border-brand focus:outline-none"
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
+          value={radius}
+          onChange={(e) => setRadius(Number(e.target.value))}
         >
-          <option value="">All categories</option>
-          {categories.map((c) => (
-            <option key={c}>{c}</option>
-          ))}
+          <option value={10}>Within 10 km</option>
+          <option value={20}>Within 20 km</option>
+          <option value={50}>Within 50 km</option>
+          <option value={100}>Within 100 km</option>
         </select>
       </div>
 
-      {!page ? (
+      {loading ? (
+        <Spinner label="Loading nearby merchants..." />
+      ) : merchants === null ? (
         <Spinner label="Loading marketplace..." />
-      ) : page.length === 0 ? (
-        <EmptyState icon="🏪" title="No merchant products available" hint="Try adjusting your search or filters." />
+      ) : merchants.length === 0 ? (
+        <EmptyState 
+          icon="🏪" 
+          title="No merchants found within your selected radius" 
+          hint={
+            <div className="flex flex-col gap-2">
+              <p>Try increasing your search radius or check your location settings.</p>
+              <button
+                onClick={() => setRadius(50)}
+                className="text-brand hover:underline"
+              >
+                Try 50 km radius
+              </button>
+            </div>
+          } 
+        />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {page.map((p) => (
-            <div key={p.id} className="ks-shadow flex flex-col rounded-2xl border border-line bg-white p-5">
-              <div className="flex items-start justify-between gap-2">
-                <h3 className="font-bold text-ink">{p.name}</h3>
-                {p.imageUrl && (
-                  <img src={p.imageUrl} alt={p.name} className="h-12 w-12 rounded-lg object-cover" />
-                )}
-              </div>
-              <p className="text-sm text-muted">
-                {p.category || "General"}
-              </p>
-              {p.merchantName && (
-                <p className="mt-1 text-xs text-muted">🏪 {p.merchantName}</p>
-              )}
-              <p className="mt-2 line-clamp-2 flex-1 text-sm text-muted">{p.description || "No description available"}</p>
-              <div className="mt-3 flex items-end justify-between">
-                <div>
-                  <p className="text-xl font-bold text-brand-dark">
-                    {formatINR(p.price)}
-                    <span className="text-sm font-medium text-muted">/{p.unit}</span>
+          {merchants.map((merchant) => (
+            <div key={merchant.merchantId} className="ks-shadow flex flex-col rounded-2xl border border-line bg-white p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <h3 className="font-bold text-ink text-lg">{merchant.fullName}</h3>
+                  <p className="text-sm text-muted mt-1">
+                    📍 {formatLocation(merchant.city, merchant.state)}
                   </p>
-                  <p className="text-xs text-muted">
-                    {p.quantity} {p.unit} available
+                  <p className="text-sm text-muted mt-1">
+                    📏 {formatDistance(merchant.distanceKm)}
                   </p>
                 </div>
+                {merchant.avatarUrl && (
+                  <img 
+                    src={merchant.avatarUrl} 
+                    alt={merchant.fullName} 
+                    className="h-12 w-12 rounded-full object-cover border border-line"
+                  />
+                )}
               </div>
-              <div className="mt-3 flex gap-2 border-t border-line pt-3">
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  placeholder={`Qty (${p.unit})`}
-                  value={quantity[p.id] ?? ""}
-                  onChange={(e) => setQuantity((q) => ({ ...q, [p.id]: e.target.value }))}
-                  className="w-24 rounded-lg border border-line px-2 py-2 text-sm focus:border-brand focus:outline-none"
-                />
-                <button
-                  onClick={() => order(p)}
-                  disabled={busyId === p.id || !p.inStock}
-                  className="flex-1 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-60"
-                >
-                  {busyId === p.id ? "Placing..." : !p.inStock ? "Out of stock" : "Place order"}
-                </button>
+
+              <div className="mt-4 border-t border-line pt-4">
+                <p className="text-sm font-medium text-ink">
+                  {merchant.itemCount} products available
+                </p>
+                {merchant.categories.length > 0 && (
+                  <p className="mt-2 text-sm text-muted">
+                    {merchant.categories.slice(0, 3).join(" · ")}
+                    {merchant.categories.length > 3 && " · ..."}
+                  </p>
+                )}
               </div>
+
+              <a
+                href={`/farmer/marketplace/merchant/${merchant.merchantId}`}
+                className="mt-4 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark text-center"
+              >
+                View Store
+              </a>
             </div>
           ))}
         </div>

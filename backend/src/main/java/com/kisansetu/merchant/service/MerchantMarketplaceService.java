@@ -17,6 +17,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.Optional;
 
 /**
  * Merchant marketplace for farmers: browse merchants by product availability,
@@ -30,7 +31,7 @@ public class MerchantMarketplaceService {
     private final ProfileRepository profileRepository;
 
     @Transactional(readOnly = true)
-    public List<MerchantSummaryResponse> getMerchants(Double userLat, Double userLng) {
+    public List<MerchantSummaryResponse> getMerchants(Double userLat, Double userLng, Double radiusKm, String search) {
         List<Product> products = productRepository.findAllInStock();
         Map<UUID, List<Product>> byMerchant = products.stream()
                 .collect(Collectors.groupingBy(Product::getMerchantId));
@@ -46,6 +47,21 @@ public class MerchantMarketplaceService {
             if (profile == null) {
                 continue;
             }
+
+            // Apply search filter
+            if (search != null && !search.trim().isEmpty()) {
+                String searchLower = search.trim().toLowerCase();
+                boolean matchesName = profile.getFullName() != null && 
+                    profile.getFullName().toLowerCase().contains(searchLower);
+                boolean matchesCity = profile.getCity() != null && 
+                    profile.getCity().toLowerCase().contains(searchLower);
+                boolean matchesState = profile.getState() != null && 
+                    profile.getState().toLowerCase().contains(searchLower);
+                if (!matchesName && !matchesCity && !matchesState) {
+                    continue;
+                }
+            }
+
             List<Product> items = entry.getValue();
             BigDecimal avgPrice = items.stream().map(Product::getPrice)
                     .reduce(BigDecimal.ZERO, BigDecimal::add)
@@ -64,12 +80,22 @@ public class MerchantMarketplaceService {
                         profile.getLatitude().doubleValue(), profile.getLongitude().doubleValue());
             }
 
+            // Apply radius filter
+            if (radiusKm != null && distance != null && distance > radiusKm) {
+                continue;
+            }
+
             result.add(new MerchantSummaryResponse(
                     profile.getUserId(), profile.getFullName(), profile.getCity(), profile.getState(),
                     profile.getAvatarUrl(),
                     GeoUtil.asDouble(profile.getLatitude()), GeoUtil.asDouble(profile.getLongitude()),
                     distance, items.size(), avgPrice, minPrice, maxPrice, categories));
         }
+
+        // Sort by distance (nearest first), putting merchants without distance at the end
+        result.sort(Comparator.comparing(MerchantSummaryResponse::distanceKm, 
+            Comparator.nullsLast(Comparator.naturalOrder())));
+
         return result;
     }
 
@@ -79,6 +105,47 @@ public class MerchantMarketplaceService {
                 .filter(p -> p.getQuantity() > 0)
                 .map(ProductResponse::from)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<MerchantSummaryResponse> getMerchantProfile(UUID merchantId, Double userLat, Double userLng) {
+        Optional<Profile> profileOpt = profileRepository.findByUserId(merchantId);
+        if (profileOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        Profile profile = profileOpt.get();
+
+        List<Product> products = productRepository.findByMerchantIdOrderByCreatedAtDesc(merchantId)
+                .stream()
+                .filter(p -> p.getQuantity() > 0)
+                .toList();
+
+        if (products.isEmpty()) {
+            return Optional.empty();
+        }
+
+        BigDecimal avgPrice = products.stream().map(Product::getPrice)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .divide(BigDecimal.valueOf(products.size()), 2, RoundingMode.HALF_UP);
+        BigDecimal minPrice = products.stream().map(Product::getPrice).min(BigDecimal::compareTo).orElse(BigDecimal.ZERO);
+        BigDecimal maxPrice = products.stream().map(Product::getPrice).max(BigDecimal::compareTo).orElse(BigDecimal.ZERO);
+        List<String> categories = products.stream()
+                .map(Product::getCategory)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+
+        Double distance = null;
+        if (userLat != null && userLng != null && profile.getLatitude() != null && profile.getLongitude() != null) {
+            distance = GeoUtil.distanceKm(userLat, userLng,
+                    profile.getLatitude().doubleValue(), profile.getLongitude().doubleValue());
+        }
+
+        return Optional.of(new MerchantSummaryResponse(
+                profile.getUserId(), profile.getFullName(), profile.getCity(), profile.getState(),
+                profile.getAvatarUrl(),
+                GeoUtil.asDouble(profile.getLatitude()), GeoUtil.asDouble(profile.getLongitude()),
+                distance, products.size(), avgPrice, minPrice, maxPrice, categories));
     }
 
     @Transactional(readOnly = true)
