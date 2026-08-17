@@ -7,8 +7,8 @@ import { PageHeader, Spinner, EmptyState } from "@/components/ui";
 type Merchant = {
   merchantId: string;
   fullName: string;
-  city: string;
-  state: string;
+  city: string | null;
+  state: string | null;
   avatarUrl?: string;
   latitude: number | null;
   longitude: number | null;
@@ -23,6 +23,9 @@ export default function FarmerMarketplacePage() {
   const [search, setSearch] = useState("");
   const [radius, setRadius] = useState<number>(20);
   const [loading, setLoading] = useState(false);
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [usingBrowserLocation, setUsingBrowserLocation] = useState(false);
+  const [farmerLocation, setFarmerLocation] = useState<{ lat: number; lng: number } | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -30,9 +33,13 @@ export default function FarmerMarketplacePage() {
     const params = new URLSearchParams();
     if (search) params.set("search", search);
     if (radius) params.set("radiusKm", radius.toString());
+    if (farmerLocation) {
+      params.set("lat", farmerLocation.lat.toString());
+      params.set("lng", farmerLocation.lng.toString());
+    }
     
     const queryString = params.toString();
-    const url = `/api/merchant/marketplace/nearby${queryString ? '?' + queryString : ''}`;
+    const url = `/api/merchant/marketplace${queryString ? '?' + queryString : ''}`;
     
     api
       .get<Merchant[]>(url)
@@ -42,7 +49,33 @@ export default function FarmerMarketplacePage() {
         setError(e instanceof Error ? e.message : 'Failed to load merchants');
       })
       .finally(() => setLoading(false));
-  }, [search, radius]);
+  }, [search, radius, farmerLocation]);
+
+  const getCurrentLocation = useCallback(() => {
+    setLocationLoading(true);
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setFarmerLocation({ lat: position.coords.latitude, lng: position.coords.longitude });
+          setUsingBrowserLocation(true);
+          setLocationLoading(false);
+        },
+        (error) => {
+          console.warn('Geolocation error:', error);
+          setLocationLoading(false);
+          // Fall back to nearby endpoint which uses saved profile location
+          setFarmerLocation(null);
+          setUsingBrowserLocation(false);
+        }
+      );
+    } else {
+      setLocationLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    getCurrentLocation();
+  }, [getCurrentLocation]);
 
   useEffect(() => {
     load();
@@ -53,11 +86,11 @@ export default function FarmerMarketplacePage() {
     return `${distance.toFixed(1)} km away`;
   };
 
-  const formatLocation = (city: string, state: string) => {
+  const formatLocation = (city: string | null, state: string | null) => {
     if (city && state) return `${city}, ${state}`;
     if (city) return city;
     if (state) return state;
-    return "Location unknown";
+    return "Location not available";
   };
 
   if (error) return (
@@ -100,14 +133,29 @@ export default function FarmerMarketplacePage() {
           value={radius}
           onChange={(e) => setRadius(Number(e.target.value))}
         >
+          <option value={5}>Within 5 km</option>
           <option value={10}>Within 10 km</option>
           <option value={20}>Within 20 km</option>
           <option value={50}>Within 50 km</option>
           <option value={100}>Within 100 km</option>
         </select>
+        {!usingBrowserLocation && (
+          <button
+            onClick={getCurrentLocation}
+            disabled={locationLoading}
+            className="rounded-lg bg-brand-light px-4 py-2.5 text-sm font-semibold text-brand-dark hover:bg-brand disabled:opacity-60"
+          >
+            {locationLoading ? "Getting location..." : "Use my location"}
+          </button>
+        )}
+        {usingBrowserLocation && (
+          <span className="text-sm text-muted self-center">Using your current location</span>
+        )}
       </div>
 
-      {loading ? (
+      {locationLoading ? (
+        <Spinner label="Finding merchants near you..." />
+      ) : loading ? (
         <Spinner label="Loading nearby merchants..." />
       ) : merchants === null ? (
         <Spinner label="Loading marketplace..." />
@@ -124,6 +172,14 @@ export default function FarmerMarketplacePage() {
               >
                 Try 50 km radius
               </button>
+              {!usingBrowserLocation && (
+                <button
+                  onClick={getCurrentLocation}
+                  className="text-brand hover:underline"
+                >
+                  Use your current location for better results
+                </button>
+              )}
             </div>
           } 
         />
@@ -131,23 +187,29 @@ export default function FarmerMarketplacePage() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {merchants.map((merchant) => (
             <div key={merchant.merchantId} className="ks-shadow flex flex-col rounded-2xl border border-line bg-white p-5">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1">
-                  <h3 className="font-bold text-ink text-lg">{merchant.fullName}</h3>
-                  <p className="text-sm text-muted mt-1">
-                    📍 {formatLocation(merchant.city, merchant.state)}
-                  </p>
-                  <p className="text-sm text-muted mt-1">
-                    📏 {formatDistance(merchant.distanceKm)}
-                  </p>
-                </div>
-                {merchant.avatarUrl && (
+              <div className="flex items-start gap-4">
+                {merchant.avatarUrl ? (
                   <img 
                     src={merchant.avatarUrl} 
                     alt={merchant.fullName} 
-                    className="h-12 w-12 rounded-full object-cover border border-line"
+                    className="h-14 w-14 rounded-full object-cover border border-line flex-shrink-0"
                   />
+                ) : (
+                  <div className="h-14 w-14 rounded-full bg-brand text-white flex items-center justify-center text-xl font-bold flex-shrink-0">
+                    {merchant.fullName.charAt(0).toUpperCase()}
+                  </div>
                 )}
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-bold text-ink text-lg truncate">{merchant.fullName}</h3>
+                  <p className="text-sm text-muted mt-1">
+                    📍 {formatLocation(merchant.city, merchant.state)}
+                  </p>
+                  {merchant.distanceKm !== null && (
+                    <p className="text-sm text-muted mt-1">
+                      📏 {formatDistance(merchant.distanceKm)}
+                    </p>
+                  )}
+                </div>
               </div>
 
               <div className="mt-4 border-t border-line pt-4">

@@ -9,8 +9,8 @@ import { formatINR } from "@/lib/format";
 type MerchantProfile = {
   merchantId: string;
   fullName: string;
-  city: string;
-  state: string;
+  city: string | null;
+  state: string | null;
   avatarUrl?: string;
   latitude: number | null;
   longitude: number | null;
@@ -93,11 +93,11 @@ export default function MerchantDetailPage() {
     return `${distance.toFixed(1)} km away`;
   };
 
-  const formatLocation = (city: string, state: string) => {
+  const formatLocation = (city: string | null, state: string | null) => {
     if (city && state) return `${city}, ${state}`;
     if (city) return city;
     if (state) return state;
-    return "Location unknown";
+    return "Location not available";
   };
 
   if (error) return (
@@ -133,21 +133,27 @@ export default function MerchantDetailPage() {
       ) : (
         <div className="mb-6 rounded-2xl border border-line bg-white p-6">
           <div className="flex items-start gap-4">
-            {merchant.avatarUrl && (
+            {merchant.avatarUrl ? (
               <img 
                 src={merchant.avatarUrl} 
                 alt={merchant.fullName} 
-                className="h-16 w-16 rounded-full object-cover border border-line"
+                className="h-16 w-16 rounded-full object-cover border border-line flex-shrink-0"
               />
+            ) : (
+              <div className="h-16 w-16 rounded-full bg-brand text-white flex items-center justify-center text-2xl font-bold flex-shrink-0">
+                {merchant.fullName.charAt(0).toUpperCase()}
+              </div>
             )}
             <div className="flex-1">
               <h2 className="text-2xl font-bold text-ink">{merchant.fullName}</h2>
               <p className="text-muted mt-1">
                 📍 {formatLocation(merchant.city, merchant.state)}
               </p>
-              <p className="text-muted mt-1">
-                📏 {formatDistance(merchant.distanceKm)}
-              </p>
+              {merchant.distanceKm !== null && (
+                <p className="text-muted mt-1">
+                  📏 {formatDistance(merchant.distanceKm)}
+                </p>
+              )}
               <p className="text-muted mt-2">
                 {merchant.itemCount} products available
               </p>

@@ -14,6 +14,7 @@ import com.kisansetu.order.dto.OrderResponse;
 import com.kisansetu.order.service.OrderService;
 import com.kisansetu.security.CurrentUser;
 import com.kisansetu.security.Role;
+import com.kisansetu.user.entity.Profile;
 import com.kisansetu.user.repository.ProfileRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -26,6 +27,7 @@ import org.springframework.web.bind.annotation.*;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 @RestController
@@ -96,6 +98,13 @@ public class MerchantController {
             @RequestParam(required = false) Double lng,
             @RequestParam(required = false) Double radiusKm,
             @RequestParam(required = false) String search) {
+        // If no location provided, try to get from farmer's profile
+        if (lat == null || lng == null) {
+            UUID farmerId = CurrentUser.get().userId();
+            Optional<Profile> farmerProfile = profileRepository.findByUserId(farmerId);
+            lat = farmerProfile.map(p -> GeoUtil.asDouble(p.getLatitude())).orElse(null);
+            lng = farmerProfile.map(p -> GeoUtil.asDouble(p.getLongitude())).orElse(null);
+        }
         return ApiResponse.ok(marketplaceService.getMerchants(lat, lng, radiusKm, search));
     }
 

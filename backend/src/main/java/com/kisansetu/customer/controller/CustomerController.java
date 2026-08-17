@@ -3,6 +3,7 @@ package com.kisansetu.customer.controller;
 import com.kisansetu.ai.service.CustomerRecommendationService;
 import com.kisansetu.common.ApiResponse;
 import com.kisansetu.common.PageResponse;
+import com.kisansetu.common.util.GeoUtil;
 import com.kisansetu.customer.dto.*;
 import com.kisansetu.customer.entity.CartItem;
 import com.kisansetu.customer.entity.CustomerAddress;
@@ -11,6 +12,8 @@ import com.kisansetu.customer.entity.WishlistItem;
 import com.kisansetu.customer.service.*;
 import com.kisansetu.farmer.dto.ListingResponse;
 import com.kisansetu.security.CurrentUser;
+import com.kisansetu.user.entity.Profile;
+import com.kisansetu.user.repository.ProfileRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -38,6 +41,7 @@ public class CustomerController {
     private final CustomerOrderService customerOrderService;
     private final RatingService ratingService;
     private final CustomerRecommendationService recommendationService;
+    private final com.kisansetu.user.repository.ProfileRepository profileRepository;
 
     // ---------------- Marketplace ----------------
 
@@ -47,10 +51,18 @@ public class CustomerController {
     public ApiResponse<List<FarmerSummaryResponse>> farmers(
             @RequestParam(required = false) Double lat,
             @RequestParam(required = false) Double lng,
+            @RequestParam(required = false) Double radiusKm,
             @RequestParam(required = false) String search,
             @RequestParam(required = false) String category,
             @RequestParam(required = false) String sort) {
-        return ApiResponse.ok(marketplaceService.getFarmers(lat, lng, search, category, sort));
+        // If no location provided, try to get from customer's profile
+        if (lat == null || lng == null) {
+            UUID customerId = CurrentUser.get().userId();
+            var customerProfile = profileRepository.findByUserId(customerId);
+            lat = customerProfile.map(p -> GeoUtil.asDouble(p.getLatitude())).orElse(null);
+            lng = customerProfile.map(p -> GeoUtil.asDouble(p.getLongitude())).orElse(null);
+        }
+        return ApiResponse.ok(marketplaceService.getFarmers(lat, lng, radiusKm, search, category, sort));
     }
 
     @GetMapping("/farmers/{farmerId}")
@@ -58,6 +70,24 @@ public class CustomerController {
     @PreAuthorize("hasAnyRole('CUSTOMER')")
     public ApiResponse<List<ListingResponse>> farmerListings(@PathVariable UUID farmerId) {
         return ApiResponse.ok(marketplaceService.getFarmerActiveListings(farmerId));
+    }
+
+    @GetMapping("/farmers/{farmerId}/profile")
+    @Operation(summary = "Profile details of a single farmer")
+    @PreAuthorize("hasAnyRole('CUSTOMER')")
+    public ApiResponse<FarmerSummaryResponse> farmerProfile(
+            @PathVariable UUID farmerId,
+            @RequestParam(required = false) Double lat,
+            @RequestParam(required = false) Double lng) {
+        // If no location provided, try to get from customer's profile
+        if (lat == null || lng == null) {
+            UUID customerId = CurrentUser.get().userId();
+            var customerProfile = profileRepository.findByUserId(customerId);
+            lat = customerProfile.map(p -> GeoUtil.asDouble(p.getLatitude())).orElse(null);
+            lng = customerProfile.map(p -> GeoUtil.asDouble(p.getLongitude())).orElse(null);
+        }
+        return ApiResponse.ok(marketplaceService.getFarmerProfile(farmerId, lat, lng)
+                .orElseThrow(() -> com.kisansetu.common.exception.ApiException.notFound("Farmer not found")));
     }
 
     @GetMapping("/farmers/{farmerId}/ratings")

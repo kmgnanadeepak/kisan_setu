@@ -36,7 +36,7 @@ public class CustomerMarketplaceService {
     private final com.kisansetu.customer.repository.CustomerOrderRepository customerOrderRepository;
 
     @Transactional(readOnly = true)
-    public List<FarmerSummaryResponse> getFarmers(Double userLat, Double userLng, String search,
+    public List<FarmerSummaryResponse> getFarmers(Double userLat, Double userLng, Double radiusKm, String search,
                                                   String category, String sort) {
         List<MarketplaceListing> listings = listingRepository.findAll().stream()
                 .filter(MarketplaceListing::isAvailable)
@@ -84,6 +84,11 @@ public class CustomerMarketplaceService {
                 distance = GeoUtil.distanceKm(userLat, userLng, lat, lng);
             }
 
+            // Apply radius filter
+            if (radiusKm != null && distance != null && distance > radiusKm) {
+                continue;
+            }
+
             result.add(new FarmerSummaryResponse(
                     profile.getUserId(), profile.getFullName(), profile.getCity(), profile.getState(),
                     profile.getAvatarUrl(), distance, items.size(), avgPrice, minPrice, maxPrice,
@@ -118,6 +123,48 @@ public class CustomerMarketplaceService {
     public List<ListingResponse> getFarmerActiveListings(UUID farmerId) {
         return listingRepository.findByFarmerIdAndStatus(farmerId, MarketplaceListing.ListingStatus.ACTIVE)
                 .stream().map(this::toResponse).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.Optional<FarmerSummaryResponse> getFarmerProfile(UUID farmerId, Double userLat, Double userLng) {
+        java.util.Optional<Profile> profileOpt = profileRepository.findByUserId(farmerId);
+        if (profileOpt.isEmpty()) {
+            return java.util.Optional.empty();
+        }
+        Profile profile = profileOpt.get();
+
+        List<MarketplaceListing> listings = listingRepository.findByFarmerIdAndStatus(farmerId, MarketplaceListing.ListingStatus.ACTIVE);
+
+        if (listings.isEmpty()) {
+            return java.util.Optional.empty();
+        }
+
+        BigDecimal avgPrice = listings.stream().map(MarketplaceListing::getPrice)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .divide(BigDecimal.valueOf(listings.size()), 2, RoundingMode.HALF_UP);
+        BigDecimal minPrice = listings.stream().map(MarketplaceListing::getPrice)
+                .min(BigDecimal::compareTo).orElse(BigDecimal.ZERO);
+        BigDecimal maxPrice = listings.stream().map(MarketplaceListing::getPrice)
+                .max(BigDecimal::compareTo).orElse(BigDecimal.ZERO);
+        List<String> categories = listings.stream().map(MarketplaceListing::getCategory)
+                .filter(Objects::nonNull).distinct().toList();
+
+        Object[] agg = ratingRepository.aggregateByFarmerIds(java.util.List.of(farmerId))
+                .stream().findFirst().orElse(null);
+        double avgRating = agg != null ? ((Number) agg[2]).doubleValue() : 0;
+        long reviewCount = agg != null ? ((Number) agg[1]).longValue() : 0;
+
+        Double distance = null;
+        double lat = profile.getLatitude() != null ? profile.getLatitude().doubleValue() : Double.NaN;
+        double lng = profile.getLongitude() != null ? profile.getLongitude().doubleValue() : Double.NaN;
+        if (!Double.isNaN(lat) && !Double.isNaN(lng) && userLat != null && userLng != null) {
+            distance = GeoUtil.distanceKm(userLat, userLng, lat, lng);
+        }
+
+        return java.util.Optional.of(new FarmerSummaryResponse(
+                profile.getUserId(), profile.getFullName(), profile.getCity(), profile.getState(),
+                profile.getAvatarUrl(), distance, listings.size(), avgPrice, minPrice, maxPrice,
+                avgRating, reviewCount, categories));
     }
 
     @Transactional(readOnly = true)

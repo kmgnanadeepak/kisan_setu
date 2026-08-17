@@ -8,9 +8,10 @@ export type Profile = {
   city?: string;
   state?: string;
   pincode?: string;
+  avatarUrl?: string;
   latitude?: number;
   longitude?: number;
-  roles: string;
+  roles?: string[];
 };
 
 export type MeResponse = {
