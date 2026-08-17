@@ -17,4 +17,8 @@ public interface ProfileRepository extends JpaRepository<Profile, UUID> {
 
     @Query("select p from Profile p where p.userId in :userIds")
     List<Profile> findByUserIds(@Param("userIds") List<UUID> userIds);
+
+    Optional<Profile> findByGoogleProviderId(String googleProviderId);
+
+    Optional<Profile> findByGoogleEmail(String googleEmail);
 }

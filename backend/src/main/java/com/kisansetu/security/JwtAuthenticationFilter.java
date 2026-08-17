@@ -58,8 +58,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 }
                 String fullName = null;
                 String metadataRole = null;
+                String authProvider = null;
+                String googleProviderId = null;
+                String googleEmail = null;
+                String avatarUrl = null;
                 try {
                     Map<String, Object> metadata = claims.getJSONObjectClaim("user_metadata");
+                    log.debug("User metadata for {}: {}", userId, metadata);
                     if (metadata != null) {
                         Object fn = metadata.get("full_name");
                         if (fn instanceof String s && !s.isBlank()) {
@@ -69,13 +74,48 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         if (r instanceof String s && !s.isBlank()) {
                             metadataRole = s;
                         }
+                        Object ap = metadata.get("auth_provider");
+                        if (ap instanceof String s && !s.isBlank()) {
+                            authProvider = s;
+                        }
+                        Object gpid = metadata.get("google_provider_id");
+                        if (gpid instanceof String s && !s.isBlank()) {
+                            googleProviderId = s;
+                        }
+                        Object ge = metadata.get("google_email");
+                        if (ge instanceof String s && !s.isBlank()) {
+                            googleEmail = s;
+                        }
+                        Object au = metadata.get("avatar_url");
+                        if (au instanceof String s && !s.isBlank()) {
+                            avatarUrl = s;
+                        }
                     }
                 } catch (ParseException ignored) {
                 }
 
+                // Also check app_metadata which is more reliable for OAuth users
+                if (metadataRole == null) {
+                    try {
+                        Map<String, Object> appMetadata = claims.getJSONObjectClaim("app_metadata");
+                        log.debug("App metadata for {}: {}", userId, appMetadata);
+                        if (appMetadata != null) {
+                            Object r = appMetadata.get("role");
+                            if (r instanceof String s && !s.isBlank()) {
+                                metadataRole = s;
+                                log.info("Found role in app_metadata for user {}: {}", userId, metadataRole);
+                            }
+                        }
+                    } catch (ParseException ignored) {
+                    }
+                }
+
+                log.info("Processing Google auth for user {} ({}): role from metadata={}, authProvider={}",
+                        userId, email, metadataRole, authProvider);
+
                 List<Role> roles;
                 try {
-                    roles = userSyncService.synchronize(userId, email, fullName, metadataRole);
+                    roles = userSyncService.synchronize(userId, email, fullName, metadataRole, authProvider, googleProviderId, googleEmail, avatarUrl);
                 } catch (DataAccessException e) {
                     log.error("Rejecting request {} {}: role lookup failed for user {}: {}",
                             request.getMethod(), request.getRequestURI(), userId, e.getMessage());

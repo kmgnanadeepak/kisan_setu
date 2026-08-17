@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { roleHome } from "@/lib/types";
 import { Logo } from "@/components/Logo";
+import { GoogleButton } from "@/components/GoogleButton";
 import { api } from "@/lib/api";
 
 const ROLES = [
@@ -17,7 +18,7 @@ const ROLES = [
 function AuthForm() {
   const router = useRouter();
   const search = useSearchParams();
-  const { supabase, user } = useAuth();
+  const { supabase, user, loading, ready } = useAuth();
   const [tab, setTab] = useState<"login" | "signup">(
     search.get("tab") === "signup" ? "signup" : "login",
   );
@@ -27,16 +28,104 @@ function AuthForm() {
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [pendingRole, setPendingRole] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!user) return;
+    console.log("[AUTH PAGE] Checking redirect conditions:", { loading, ready, hasUser: !!user, userRoles: user?.roles });
+    // CRITICAL: Only redirect if auth is fully initialized AND user exists AND has roles
+    // This prevents redirect loops during auth initialization
+    if (loading || !ready) {
+      console.log("[AUTH PAGE] Skipping redirect - loading or not ready");
+      return;
+    }
+    if (!user) {
+      console.log("[AUTH PAGE] Skipping redirect - no user");
+      return;
+    }
 
-    const home = roleHome(user.roles?.[0] ?? "farmer");
+    // CRITICAL: Only redirect if user has roles
+    const userRoles = user.roles ?? [];
+    if (userRoles.length === 0) {
+      console.log("[AUTH PAGE] Skipping redirect - user has no roles yet");
+      return;
+    }
+
+    const home = roleHome(userRoles[0]);
+    console.log("[AUTH PAGE] REDIRECTING to:", home);
     router.replace(home);
-  }, [user, router]);
+  }, [user, loading, ready, router]);
 
-  if (user) {
-    return null;
+  // Handle OAuth callback - check for error in URL and assign role for new users
+  useEffect(() => {
+    const error = search.get("error");
+    const errorDescription = search.get("error_description");
+
+    if (error) {
+      setError(errorDescription || "Google authentication failed");
+      setGoogleLoading(false);
+      // Clean up URL by removing error params
+      const url = new URL(window.location.href);
+      url.searchParams.delete("error");
+      url.searchParams.delete("error_description");
+      router.replace(url.pathname + url.search);
+      return;
+    }
+
+    // Handle post-OAuth role assignment for new users
+    const handlePostOAuthRoleAssignment = async () => {
+      if (!supabase || !user) return;
+
+      const pendingRole = localStorage.getItem('pending_signup_role');
+      if (pendingRole) {
+        console.log("Found pending role for user:", pendingRole);
+        try {
+          // Update Supabase metadata with the role
+          const { error: updateError } = await supabase.auth.updateUser({
+            data: { role: pendingRole }
+          });
+
+          if (updateError) {
+            console.error("Failed to update user role via Supabase:", updateError);
+          } else {
+            console.log("Successfully updated user role via Supabase to:", pendingRole);
+          }
+
+          // Clear the pending role
+          localStorage.removeItem('pending_signup_role');
+
+          // Force a session refresh to get new JWT with updated metadata
+          const { data: { session: newSession } } = await supabase.auth.refreshSession();
+          if (newSession) {
+            console.log("Session refreshed with new JWT containing updated role");
+            // Trigger auth state refresh by calling the backend
+            try {
+              const token = newSession.access_token;
+              const me = await api.get<{ id: string; roles: string[] }>("/api/auth/me");
+              console.log("User data after role assignment:", me);
+            } catch (apiErr) {
+              console.error("Failed to refresh user data:", apiErr);
+            }
+          }
+        } catch (err) {
+          console.error("Error assigning user role:", err);
+        }
+      }
+    };
+
+    handlePostOAuthRoleAssignment();
+  }, [search, router, supabase, user]);
+
+  // Show loading state while auth is initializing
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-surface">
+        <div className="text-center">
+          <div className="mb-4 h-8 w-8 animate-spin rounded-full border-[3px] border-brand border-t-transparent mx-auto" />
+          <p className="text-sm text-muted">Loading...</p>
+        </div>
+      </div>
+    );
   }
 
   async function submit(e: React.FormEvent) {
@@ -73,6 +162,59 @@ function AuthForm() {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleGoogleAuth() {
+    setError(null);
+    setGoogleLoading(true);
+    try {
+      if (!supabase) {
+        setError(
+          "Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in frontend/.env.local.",
+        );
+        return;
+      }
+
+      // For signup, store the selected role in localStorage before OAuth redirect
+      // This is needed because Supabase OAuth doesn't reliably preserve custom metadata
+      if (tab === "signup") {
+        localStorage.setItem('pending_signup_role', role);
+        console.log("Stored pending role in localStorage:", role);
+      } else {
+        localStorage.removeItem('pending_signup_role');
+      }
+
+      const authOptions: any = {
+        redirectTo: `${window.location.origin}/auth`,
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
+        },
+        scopes: 'email profile'
+      };
+
+      if (tab === "signup") {
+        authOptions.data = {
+          role: role,
+          auth_provider: "GOOGLE",
+        };
+      } else {
+        authOptions.data = {
+          auth_provider: "GOOGLE",
+        };
+      }
+
+      console.log("Google OAuth options:", authOptions);
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: authOptions,
+      });
+
+      if (error) throw error;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Google authentication failed");
+      setGoogleLoading(false);
     }
   }
 
@@ -193,6 +335,22 @@ function AuthForm() {
                 {busy ? "Please wait..." : tab === "login" ? "Sign in" : "Create account"}
               </button>
             </form>
+
+            <div className="relative my-6">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-line" />
+              </div>
+              <div className="relative flex justify-center text-sm">
+                <span className="bg-white px-2 text-muted">or</span>
+              </div>
+            </div>
+
+            <GoogleButton
+              onClick={handleGoogleAuth}
+              disabled={busy}
+              loading={googleLoading}
+              text={tab === "login" ? "Continue with Google" : "Continue with Google"}
+            />
           </div>
         </div>
       </div>

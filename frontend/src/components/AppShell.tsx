@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
@@ -48,16 +49,44 @@ const NAV: Record<string, NavItem[]> = {
 };
 
 function ShellInner({ children, role }: { children: React.ReactNode; role: Role }) {
-  const { user, signOut } = useAuth();
+  const { user, signOut, ready, loading } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
 
-  if (!user) {
+  // Debug logging
+  useEffect(() => {
+    console.log("[APPSHELL] State:", { loading, ready, hasUser: !!user, pathname, role });
+  }, [loading, ready, user, pathname, role]);
+
+  // Handle navigation in useEffect to prevent React error
+  useEffect(() => {
+    console.log("[APPSHELL] Checking redirect conditions:", { ready, loading, hasUser: !!user, pathname });
+    if (!ready || loading) {
+      console.log("[APPSHELL] Skipping redirect - not ready or loading");
+      return;
+    }
+
+    // CRITICAL: Check authentication BEFORE any other logic
+    // If no user exists, the user is unauthenticated - redirect to /auth
+    if (!user) {
+      console.log("[APPSHELL] REDIRECTING to /auth (no user)");
+      router.replace("/auth");
+    }
+  }, [user, ready, loading, router, pathname]);
+
+  // Show loading state while auth is initializing
+  if (!ready || loading) {
     return (
       <div className="min-h-screen bg-surface">
-        <Spinner label="Signing you in..." />
+        <Spinner label="Loading..." />
       </div>
     );
+  }
+
+  // CRITICAL: Check authentication BEFORE any other logic
+  // If no user exists, the user is unauthenticated - redirect to /auth
+  if (!user) {
+    return null;
   }
 
   const items = NAV[role] ?? NAV.FARMER;
@@ -103,7 +132,7 @@ function ShellInner({ children, role }: { children: React.ReactNode; role: Role 
           <button
             onClick={async () => {
               await signOut();
-              router.push("/");
+              router.push("/auth");
             }}
             className="w-full rounded-xl border border-line px-3 py-2 text-sm font-medium text-muted hover:bg-surface hover:text-ink"
           >

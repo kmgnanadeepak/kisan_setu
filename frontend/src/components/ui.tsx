@@ -1,6 +1,8 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { roleLabel, roleHome, type Role } from "@/lib/types";
 
@@ -113,9 +115,65 @@ export function AppLink({ href, children, variant = "primary" }: { href: string;
 }
 
 export function RoleGate({ roles, children }: { roles: Role[]; children: React.ReactNode }) {
-  const { user } = useAuth();
-  if (!user) return null;
+  const { user, loading, ready } = useAuth();
+  const router = useRouter();
+
+  // Debug logging
+  useEffect(() => {
+    console.log("[ROLE GATE] State:", { loading, ready, hasUser: !!user, roles, userRoles: user?.roles });
+  }, [loading, ready, user, roles]);
+
+  // Handle navigation in useEffect to prevent React error
+  useEffect(() => {
+    console.log("[ROLE GATE] Checking redirect conditions:", { ready, loading, hasUser: !!user });
+    if (!ready || loading) {
+      console.log("[ROLE GATE] Skipping redirect - not ready or loading");
+      return;
+    }
+
+    // CRITICAL: Check authentication BEFORE checking role
+    // If no user exists, the user is unauthenticated - redirect to /auth
+    if (!user) {
+      console.log("[ROLE GATE] REDIRECTING to /auth (no user)");
+      router.replace("/auth");
+      return;
+    }
+
+    const userRoles = user.roles ?? [];
+
+    // If user has no roles at all, redirect to auth (this shouldn't happen normally)
+    if (userRoles.length === 0) {
+      console.log("[ROLE GATE] REDIRECTING to /auth (no roles)");
+      router.replace("/auth");
+      return;
+    }
+
+    console.log("[ROLE GATE] User authenticated with roles:", userRoles);
+  }, [user, loading, ready, router]);
+
+  // Show loading state while auth is initializing
+  if (!ready || loading) {
+    return (
+      <div className="min-h-screen bg-surface">
+        <Spinner label="Loading..." />
+      </div>
+    );
+  }
+
+  // CRITICAL: Check authentication BEFORE checking role
+  // If no user exists, the user is unauthenticated - redirect to /auth
+  if (!user) {
+    return null;
+  }
+
   const userRoles = user.roles ?? [];
+
+  // If user has no roles at all, redirect to auth (this shouldn't happen normally)
+  if (userRoles.length === 0) {
+    return null;
+  }
+
+  // Only check role AFTER authentication is confirmed
   const has = userRoles.some((r) => roles.includes(((r ?? "").toUpperCase()) as Role));
   if (!has) {
     const firstRole = userRoles[0] ?? "";

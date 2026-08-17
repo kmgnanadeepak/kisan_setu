@@ -15,12 +15,18 @@ export type AuthState = {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+// Singleton pattern to prevent multiple Supabase clients
+let supabaseClient: SupabaseClient | null = null;
+
 function makeClient(): SupabaseClient | null {
+  if (supabaseClient) return supabaseClient;
+
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key || url.includes("your-project")) return null;
   try {
-    return createClient(url, key);
+    supabaseClient = createClient(url, key);
+    return supabaseClient;
   } catch {
     return null;
   }
@@ -29,8 +35,13 @@ function makeClient(): SupabaseClient | null {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [supabase] = useState<SupabaseClient | null>(() => makeClient());
   const [user, setUser] = useState<MeResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [ready, setReady] = useState(false);
+
+  // Debug logging
+  useEffect(() => {
+    console.log("[AUTH PROVIDER] State changed:", { loading, ready, hasUser: !!user, userRoles: user?.roles });
+  }, [loading, ready, user]);
 
   const refreshUser = useCallback(async (token: string) => {
     setToken(token);
@@ -47,28 +58,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      console.log("[AUTH PROVIDER] Starting session check...");
       if (!supabase) {
+        console.log("[AUTH PROVIDER] No supabase client, setting ready=true, loading=false");
         setReady(true);
+        setLoading(false);
         return;
       }
       const { data } = await supabase.auth.getSession();
       if (cancelled) return;
+      console.log("[AUTH PROVIDER] Session check result:", { hasSession: !!data.session, hasToken: !!data.session?.access_token });
       const token = data.session?.access_token ?? null;
       if (token) {
-        setLoading(true);
-        await refreshUser(token);
-        setLoading(false);
+        console.log("[AUTH PROVIDER] Token found, refreshing user...");
+        const success = await refreshUser(token);
+        if (success) {
+          console.log("[AUTH PROVIDER] User loaded successfully, setting ready=true");
+        } else {
+          console.log("[AUTH PROVIDER] Failed to load user, but setting ready=true anyway");
+        }
+      } else {
+        console.log("[AUTH PROVIDER] No token, user remains null, setting ready=true");
       }
+      console.log("[AUTH PROVIDER] Setting loading=false");
+      setLoading(false);
       supabase.auth.onAuthStateChange((_event, session) => {
+        console.log("[AUTH PROVIDER] Auth state changed:", { event: _event, hasSession: !!session, hasToken: !!session?.access_token });
         const t = session?.access_token ?? null;
         if (t) {
           setLoading(true);
           refreshUser(t).finally(() => setLoading(false));
         } else {
+          console.log("[AUTH PROVIDER] Session cleared, clearing user and token");
           setToken(null);
           setUser(null);
         }
       });
+      console.log("[AUTH PROVIDER] Setting ready=true");
       setReady(true);
     })();
     return () => {
@@ -77,9 +103,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [supabase, refreshUser]);
 
   const signOut = useCallback(async () => {
+    setLoading(true);
     setToken(null);
     setUser(null);
     if (supabase) await supabase.auth.signOut();
+    setLoading(false);
   }, [supabase]);
 
   return (

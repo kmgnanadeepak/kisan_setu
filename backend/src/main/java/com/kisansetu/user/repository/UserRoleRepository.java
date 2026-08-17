@@ -20,4 +20,7 @@ public interface UserRoleRepository extends JpaRepository<UserRole, UUID> {
     List<String> findRoleStringsByUserId(@Param("userId") UUID userId);
 
     boolean existsByUserIdAndRole(UUID userId, Role role);
+
+    @Query("select count(ur) > 0 from UserRole ur where ur.userId = :userId")
+    boolean existsByUserId(@Param("userId") UUID userId);
 }

@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -42,16 +43,62 @@ public class UserRegistrationSyncService {
 
     @Transactional
     public List<Role> synchronize(UUID userId, String email, String fullName, String metadataRole) {
+        return synchronize(userId, email, fullName, metadataRole, null, null, null, null);
+    }
+
+    @Transactional
+    public List<Role> synchronize(UUID userId, String email, String fullName, String metadataRole,
+                                  String authProvider, String googleProviderId, String googleEmail, String avatarUrl) {
         Optional<Profile> existing = profileRepository.findByUserId(userId);
         boolean profileCreated = existing.isEmpty();
         existing.orElseGet(() -> {
             Profile created = new Profile();
             created.setUserId(userId);
             created.setFullName(profileName(fullName, email));
+            created.setAuthProvider(authProvider != null ? authProvider : "EMAIL");
+            if (googleProviderId != null) {
+                created.setGoogleProviderId(googleProviderId);
+            }
+            if (googleEmail != null) {
+                created.setGoogleEmail(googleEmail);
+            }
+            if (avatarUrl != null) {
+                created.setAvatarUrl(avatarUrl);
+            }
             return profileRepository.save(created);
         });
 
+        // Update existing profile with Google info if newly provided
+        if (existing.isPresent() && !profileCreated) {
+            Profile profile = existing.get();
+            boolean updated = false;
+            if (authProvider != null && (profile.getAuthProvider() == null || profile.getAuthProvider().equals("EMAIL"))) {
+                profile.setAuthProvider(authProvider);
+                updated = true;
+            }
+            if (googleProviderId != null && profile.getGoogleProviderId() == null) {
+                profile.setGoogleProviderId(googleProviderId);
+                updated = true;
+            }
+            if (googleEmail != null && profile.getGoogleEmail() == null) {
+                profile.setGoogleEmail(googleEmail);
+                updated = true;
+            }
+            if (avatarUrl != null && profile.getAvatarUrl() == null) {
+                profile.setAvatarUrl(avatarUrl);
+                updated = true;
+            }
+            if (fullName != null && !fullName.isBlank() && (profile.getFullName() == null || profile.getFullName().isBlank() || profile.getFullName().startsWith("User"))) {
+                profile.setFullName(fullName.trim());
+                updated = true;
+            }
+            if (updated) {
+                profileRepository.save(profile);
+            }
+        }
+
         List<Role> roles = userRoleRepository.findRolesByUserId(userId);
+        log.info("Current roles for user {} ({}): {}", userId, email, roles);
         if (roles.isEmpty() && metadataRole != null) {
             Role role = Role.fromDbValue(metadataRole);
             if (role != null) {
@@ -60,15 +107,30 @@ public class UserRegistrationSyncService {
                 userRole.setRole(role);
                 userRoleRepository.save(userRole);
                 roles = List.of(role);
-                log.info("Provisioned {} role for Supabase user {} ({})", role, userId, email);
+                log.info("Provisioned {} role for Supabase user {} ({}) from metadata", role, userId, email);
             } else {
                 log.warn("Supabase user {} ({}) has metadata role '{}' which is not a valid app "
                         + "role; access stays unauthorized", userId, email, metadataRole);
             }
+        } else if (roles.isEmpty()) {
+            log.warn("Supabase user {} ({}) has no roles and no metadata role provided; user will be unauthorized", userId, email);
         }
-        log.info("App records for Supabase user {} ({}): profile {}, roles {}", userId, email,
+        log.info("Final roles for Supabase user {} ({}): profile {}, roles {}", userId, email,
                 profileCreated ? "created" : "exists", roles);
         return roles;
+    }
+
+    /**
+     * Find existing user by Google provider ID or email for account linking
+     */
+    public Optional<Profile> findByGoogleIdentity(String googleProviderId, String googleEmail) {
+        if (googleProviderId != null) {
+            return profileRepository.findByGoogleProviderId(googleProviderId);
+        }
+        if (googleEmail != null) {
+            return profileRepository.findByGoogleEmail(googleEmail);
+        }
+        return Optional.empty();
     }
 
     private String profileName(String fullName, String email) {

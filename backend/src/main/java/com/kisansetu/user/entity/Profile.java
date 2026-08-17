@@ -33,6 +33,15 @@ public class Profile {
     @Column(name = "avatar_url")
     private String avatarUrl;
 
+    @Column(name = "auth_provider")
+    private String authProvider;
+
+    @Column(name = "google_provider_id")
+    private String googleProviderId;
+
+    @Column(name = "google_email")
+    private String googleEmail;
+
     private BigDecimal latitude;
     private BigDecimal longitude;
 
